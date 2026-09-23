@@ -1,0 +1,9 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+if(NOT TARGET OCReg::ocreg)
+  include("${CMAKE_CURRENT_LIST_DIR}/OCRegTargets.cmake")
+endif()
+
+check_required_components(OCReg)
