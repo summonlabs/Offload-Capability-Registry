@@ -2,11 +2,13 @@
 // Copyright 2026 Summon Software Labs.
 #include "ocreg/persist.hpp"
 
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <string>
 #include <system_error>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -710,25 +712,38 @@ Outcome<CommitToken> Store::write_snapshot(const RegistryState& state, Tick now)
     }
     handle.value().close();
   }
-  if (impl_->options.sync_on_commit) {
-    std::error_code sync_error;
-    std::filesystem::rename(temporary, impl_->options.base_path, sync_error);
-    if (sync_error) {
-      std::filesystem::remove(impl_->options.base_path, sync_error);
-      sync_error.clear();
-      std::filesystem::rename(temporary, impl_->options.base_path, sync_error);
-      if (sync_error) {
-        return Outcome<CommitToken>(
-            Status::failure(ReasonCode::StoreWriteFailed, "snapshot rename failed"));
-      }
-    }
-  } else {
-    std::error_code rename_error;
+  // The rename replaces the store file itself. While a reader has the file
+  // open (an inspection, a backup, an antivirus or indexing scan) it fails on
+  // Windows until the reader closes it, so it is retried for a bounded time
+  // (about 2 s); a directory in the way is not transient and fails at once.
+  // Removing the store file and renaming again failed the same way under such
+  // a reader, and under a reader that allows deletion it removed the snapshot
+  // before the rename failed.
+  std::error_code rename_error;
+  for (int attempt = 0;; ++attempt) {
+    rename_error.clear();
     std::filesystem::rename(temporary, impl_->options.base_path, rename_error);
-    if (rename_error) {
-      return Outcome<CommitToken>(
-          Status::failure(ReasonCode::StoreWriteFailed, "snapshot rename failed"));
+    if (!rename_error) {
+      break;
     }
+#if defined(_WIN32)
+    // ERROR_ACCESS_DENIED, ERROR_SHARING_VIOLATION and ERROR_LOCK_VIOLATION.
+    std::error_code kind;
+    const bool transient =
+        rename_error.category() == std::system_category() &&
+        (rename_error.value() == 5 || rename_error.value() == 32 || rename_error.value() == 33) &&
+        !std::filesystem::is_directory(impl_->options.base_path, kind);
+#else
+    const bool transient = false;
+#endif
+    if (!transient || attempt >= 100) {
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+  if (rename_error) {
+    return Outcome<CommitToken>(
+        Status::failure(ReasonCode::StoreWriteFailed, "snapshot rename failed"));
   }
 
   CommitToken token;

@@ -96,8 +96,15 @@ Outcome<Socket> listen_on(const std::string& address, std::uint16_t port, std::s
   }
   if (reuse_address) {
     const int one = 1;
+#if defined(_WIN32)
+    // SO_REUSEADDR on Windows lets a second socket bind a port that is still
+    // listening; exclusive use makes that second bind fail instead.
+    (void)::setsockopt(listener, SOL_SOCKET, SO_EXCLUSIVEADDRUSE,
+                       reinterpret_cast<const char*>(&one), sizeof(one));
+#else
     (void)::setsockopt(listener, SOL_SOCKET, SO_REUSEADDR,
                        reinterpret_cast<const char*>(&one), sizeof(one));
+#endif
   }
   if (::bind(listener, results->ai_addr, static_cast<int>(results->ai_addrlen)) != 0) {
     ::freeaddrinfo(results);

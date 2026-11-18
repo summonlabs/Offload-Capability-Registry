@@ -20,8 +20,10 @@ endif()
 
 if(OCREG_ENABLE_ASAN AND MSVC)
   # MSVC requires the dynamic ASan runtime; /RTC1 is incompatible with it.
-  add_compile_options(/fsanitize=address)
-  add_link_options(/fsanitize=address)
+  # Debug information is required: without it MSVC warns C5072 for every
+  # source, which /WX turns into an error.
+  add_compile_options(/fsanitize=address /Zi)
+  add_link_options(/DEBUG /INCREMENTAL:NO)
   string(REPLACE "/RTC1" "" CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG}")
 endif()
 

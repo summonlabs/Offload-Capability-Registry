@@ -317,3 +317,23 @@ OCREG_TEST(connection_and_worker_bounds_are_enforced_and_reported) {
   CHECK(service.connections_refused() >= 1);
   CHECK(service.connections_accepted() >= 1);
 }
+
+OCREG_TEST(a_second_listener_cannot_take_a_listening_port) {
+  // The listener is opened the way Service::start() opens it, with the default
+  // options. No accept loop runs, so a second listener that does get the port
+  // cannot keep a stop() waiting.
+  net::ensure_initialised();
+  const ServerOptions options;
+  std::uint16_t port = 0;
+  auto first = net::listen_on("127.0.0.1", 0, 8, options.reuse_address, port);
+  REQUIRE(first.ok());
+  CHECK(port != 0);
+  std::uint16_t second_port = 0;
+  auto second = net::listen_on("127.0.0.1", port, 8, options.reuse_address, second_port);
+  // Two registries must never share one listening port: the second bind fails.
+  CHECK(!second.ok());
+  if (second.ok()) {
+    net::close_socket(second.value());
+  }
+  net::close_socket(first.value());
+}

@@ -1,9 +1,12 @@
 // Offload Capability Registry - persistence and recovery tests.
 // Copyright 2026 Summon Software Labs.
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "ocreg/codec.hpp"
@@ -435,4 +438,35 @@ OCREG_TEST(random_bytes_never_decode_into_a_valid_state) {
       CHECK(!reader.ok());
     }
   }
+}
+
+OCREG_TEST(a_compaction_waits_for_a_reader_of_the_store_file) {
+  const auto directory = fresh_dir("store_reader");
+  const auto base = directory / "state.ocregstore";
+  RegistryState state = build_state(3);
+  state.store_generation = StoreGeneration(1);
+  auto bound = Store::bind(options_for(base));
+  REQUIRE(bound.ok());
+  REQUIRE(bound.value()->compact(state, kSecond).ok());
+  bool reader_opened = false;
+  bool compacted = false;
+  {
+    // An inspection or a backup holds the store file open while the next
+    // compaction replaces it, and closes it shortly after.
+    std::ifstream reader(base, std::ios::binary);
+    reader_opened = reader.is_open();
+    std::thread compactor([&bound, &state, &compacted] {
+      compacted = bound.value()->compact(state, kSecond).ok();
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    reader.close();
+    compactor.join();
+  }
+  CHECK(reader_opened);
+  // The replacement waits for the reader instead of failing the compaction.
+  CHECK(compacted);
+  bound.value().reset();
+  const auto report = Store::open(options_for(base));
+  REQUIRE(report.ok());
+  CHECK(state_digest(report.value().state) == state_digest(state));
 }
